@@ -233,10 +233,10 @@ source on first use, and never closes anything by itself. The call leaves
 Captain's Call immediately - the snapshot buckets it `reconciling` and shows it
 under Charted Next as `reconcile requested <time>` - and returns only if the
 owner finds it still active.
-- Card content is read from the live board, then the durable store the board
-build writes (`state/decision-cards/<task>.json`), then the composed payload
-history. That store is what keeps the authored options available after a board
-rebuild.
+- Card content is read from the durable store written when the call is raised
+  (`state/decision-cards/<task>.json`), then the live board, then the composed
+  payload history. The board build also merges that store first, so the authored
+  raise-time card remains authoritative across rebuilds.
 - When no composed card exists for a ticket, the dialog still opens with its
 durable title, its hold reason as the `ABOUT` line, a freeform answer, and
 `Reconcile`.

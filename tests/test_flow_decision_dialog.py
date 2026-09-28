@@ -175,8 +175,9 @@ def main() -> int:
         lost_content = flow.decision_card_content(lost, [main_home, mate_home], main_home)
         check(lost_content["home_path"] == "", "an unresolvable owner carries no answering home")
 
-        # the durable store outlives a board rebuild: below the live board, above
-        # the payload history
+        # the durable store is authoritative: a raise-time card written where the
+        # call was raised must not be shadowed by an older board copy, and the
+        # payload history stays the last fallback
         store_dir = os.path.join(mate_home.path, "state", "decision-cards")
         os.makedirs(store_dir, exist_ok=True)
         with open(os.path.join(store_dir, "payload-only-task.json"), "w") as fh:
@@ -193,7 +194,7 @@ def main() -> int:
                 {
                     "schema": "fm-decision-card.v1",
                     "generated": "2026-01-01T00:00:00Z",
-                    "card": {**BOARD_CARD, "title": "Store copy loses to the board"},
+                    "card": {**BOARD_CARD, "title": "Store copy wins over the board"},
                 },
                 fh,
             )
@@ -203,8 +204,8 @@ def main() -> int:
         )
         check(
             flow.decision_card_for("demo-issue-29", mate_home).get("title")
-            == "Draft the release checklist for #29",
-            "the live board still beats the durable store",
+            == "Store copy wins over the board",
+            "the durable store beats a board copy that may be older",
         )
 
         # a real hold reason becomes the about line when no card is composed
@@ -235,6 +236,15 @@ def main() -> int:
             "options": BOARD_CARD["options"] + [dict(flow.RECONCILE_OPTION)],
         }
         write_board(mate_home, [with_reconcile])
+        with open(os.path.join(store_dir, f"{BOARD_CARD['key']}.json"), "w") as fh:
+            json.dump(
+                {
+                    "schema": "fm-decision-card.v1",
+                    "generated": "2026-01-02T00:00:00Z",
+                    "card": with_reconcile,
+                },
+                fh,
+            )
         dup = flow.decision_card_for(BOARD_CARD["key"], mate_home)
         check([o["value"] for o in dup["options"]].count("reconcile") == 1,
               "an already-injected reconcile is kept single")

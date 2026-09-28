@@ -1224,12 +1224,15 @@ def _store_card(path: str) -> dict:
 
 
 def decision_card_for(key: str, *homes: Home | None) -> dict:
-    """The composed board card for one captain-held task id.
+    """The composed card for one captain-held task id.
 
-    The live board in a home is authoritative, the durable decision-card store
-    written by the board build survives a rebuild, and the composed payload
-    files it was built from are the last fallback. The owning home wins over
-    the board on screen, because a parent board can carry a secondmate's card.
+    The durable decision-card store is AUTHORITATIVE: a raise-time card is
+    written there the moment the call is raised (bin/fm-captain-hold.sh), and
+    the board build persists the effective card there too, so a stored record is
+    never older than the board page it came from. The live board file is the next
+    source, and the composed payload files it was built from are the last
+    fallback. The owning home wins over the board on screen, because a parent
+    board can carry a secondmate's card.
     """
     ordered: list[Home] = []
     for home in homes:
@@ -1240,15 +1243,15 @@ def decision_card_for(key: str, *homes: Home | None) -> dict:
     if not KEY_RE.fullmatch(key):
         return {}
     for home in ordered:
-        card = _board_file_cards(
-            os.path.join(home.path, ".lavish", "bearings-board.html")
-        ).get(key)
-        if card:
-            return card
-    for home in ordered:
         card = _store_card(
             os.path.join(home.path, "state", "decision-cards", f"{key}.json")
         )
+        if card:
+            return card
+    for home in ordered:
+        card = _board_file_cards(
+            os.path.join(home.path, ".lavish", "bearings-board.html")
+        ).get(key)
         if card:
             return card
     for home in ordered:
