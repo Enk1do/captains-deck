@@ -123,6 +123,7 @@ worktree) stay separate.
 | **Captain's Call** | `decisions_open` - click a ticket to decide it in place |
 | **Awaiting Merge** | `in_flight` rows whose Firstmate `state` is `done` (crew finished, waiting on merge/review) |
 | **Landed** | `landed` — Firstmate's "Recently Landed": merged PRs, completed scouts, local-only merges (hidden by default here; toggle with `L`) |
+| **Other Agents** | All tab only: every Herdr agent that is not a Firstmate pane, from `herdr api snapshot` |
 
 Firstmate's own bearings has four sections (Underway, Charted Next, Captain's Call,
 Recently Landed) and deliberately keeps run status out of the section split.
@@ -131,6 +132,15 @@ rows, which are the ones waiting on a merge.
 
 The board uses **Firstmate's own bounds** by default (`FM_BEARINGS_LANDED` = 6
 newest per home, gates/in-flight = 20). `FM_FLOW_ALL=1` requests every row.
+
+## Other agents
+
+The **All** tab also lists every Herdr agent that is not a Firstmate pane, in an **Other Agents** column that takes the place of Landed (the fleet board never carries Landed rows).
+Blocked agents sort first, then done, working, and idle.
+Each card shows the workspace, the agent, its terminal title, the time in its current state, and its tab and pane; click it to open that tab.
+A pane counts as Firstmate's when a task's `state/<task>.meta` names it, when its working directory is a Firstmate home (the supervisor), or when it sits in a Firstmate task workspace (`└ <task> · p:<token>`).
+The header counts the other agents on every tab and shows how many are blocked, so a waiting agent is visible from any crew.
+Herdr does not timestamp state changes, so the deck times them itself: a state that was already there when the board opened shows as `for ≥<time>`.
 
 Crew tabs show a live activity dot (`●` working/blocked, `○` agent present) and
 the number of tickets on that board once it has been visited; a visited board
@@ -153,7 +163,7 @@ column including Landed when that column is visible.
 Badges: `● shipping`, `◐ validating`, `⛔ blocked`, `⚑ decision` /
 `⚑ captain`, `◍ awaits merge`, `⏸ parked` / `⏸ paused`, `⛔ failed`,
 `✓ done` / `✓ landed`, `· queued`.
-Live state comes from `herdr agent list`; activity and review state come from
+Live state comes from `herdr api snapshot`; activity and review state come from
 Firstmate's bearings snapshot and the home's `state/<task>.status` tail.
 While an agent is **shipping**, **validating**, or **blocked**, the
 **doing/status** line carries total run time and total token use in the same
@@ -248,7 +258,7 @@ and the close all live in Firstmate.
 The board never redraws itself wholesale.
 
 - **Live tick (2s):** the active board rebuilds its badges from cheap sources —
-  Herdr's agent/pane list, each task's `state/<id>.meta` and the tail of
+  one `herdr api snapshot` (agents, panes, workspace and tab labels), each task's `state/<id>.meta` and the tail of
   `state/<id>.status` (both cached by mtime).
 - **Bearings (20s):** the expensive `fm-bearings-snapshot.sh` run only happens
   when the cached snapshot is older than `FM_FLOW_BEARINGS_SECS`, when you switch
@@ -266,6 +276,7 @@ The board never redraws itself wholesale.
 | Click a **crew name** (top row) | Switch instantly; **All** loads every mate's bearings; other tabs use cached cards first, then refresh |
 | Click a **ticket** | Focus the ticket's Herdr tab/pane, which selects that agent in the Herdr agents sidebar |
 | Click a Captain's Call **ticket** | Open its decision card modal and queue the captain's answer |
+| Click an **Other Agents** card | Focus that agent's Herdr tab |
 | Click a ticket with no live pane | Footer explains it, e.g. `demo-issue-198: no live pane · (no worktree yet)` |
 | `1`…`9`, `Tab` / `Shift+Tab`, `[` / `]` | Switch crew |
 | `←`/`→` or `h`/`l` | Move between columns |
