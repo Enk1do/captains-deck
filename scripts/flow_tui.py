@@ -1694,6 +1694,73 @@ def run_submit(dialog: DecisionDialog) -> tuple[bool, str]:
     return ok, detail
 
 
+# ----------------------------------------------------------------------------
+# Message Firstmate (`m`)
+# ----------------------------------------------------------------------------
+
+# The longest message the box sends; a longer one is refused with this limit.
+MESSAGE_LIMIT = 2000
+
+
+class MessageBox:
+    """The `m` box: what the captain typed and the last refusal."""
+
+    __slots__ = ("text", "error")
+
+    def __init__(self) -> None:
+        self.text = ""
+        self.error = ""
+
+
+def supervisor_target(
+    home: Home | None, homes: list[Home], agents: dict[str, dict]
+) -> tuple[Home | None, str]:
+    """(home, pane_id) of the Firstmate supervisor a message from this tab reaches.
+
+    A crew tab targets its own home and the All tab the captain home, which
+    home discovery sorts first. The supervisor is the agent whose cwd is the
+    home path, the same match the crew activity dot uses.
+    """
+    target = next(iter(real_homes(homes)), None) if is_aggregate_home(home) else home
+    if target is None or not target.path:
+        return target, ""
+    want = os.path.realpath(target.path)
+    for pid in sorted(agents):
+        agent = agents[pid]
+        cwds = {os.path.realpath(agent[k]) for k in ("cwd", "foreground_cwd") if agent.get(k)}
+        if want in cwds:
+            return target, pid
+    return target, ""
+
+
+def send_to_firstmate(pane_id: str, text: str) -> tuple[bool, str]:
+    """Submit one message to a supervisor pane, as if the captain typed it.
+
+    Returns (ok, detail). On a refusal the detail is herdr's own
+    ``code: message``, e.g. ``agent_blocked`` while Firstmate waits at a dialog.
+    """
+    try:
+        p = subprocess.run(
+            [HERDR_BIN, "agent", "prompt", pane_id, text],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=_child_env(),
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        return False, f"could not run herdr agent prompt: {exc!r}"
+    if p.returncode == 0:
+        return True, ""
+    lines = [ln for ln in ((p.stderr or "") + (p.stdout or "")).splitlines() if ln.strip()]
+    last = lines[-1].strip() if lines else ""
+    try:
+        err = json.loads(last)["error"]
+        return False, f"{err.get('code')}: {err.get('message')}"
+    except Exception:
+        return False, last or f"herdr agent prompt exited {p.returncode}"
+
+
 class Card:
     __slots__ = (
         "id",
@@ -2463,6 +2530,7 @@ class UI:
         self._dialog_scroll_follow = False
         self.help = False
         self.help_box: tuple[int, int, int, int] | None = None
+        self.message: MessageBox | None = None
         self.footer_hits: list[tuple[int, int, str]] = []
 
     # -- helpers ------------------------------------------------------------
@@ -2748,6 +2816,8 @@ class UI:
     def click(self, x: int, y: int, button: int) -> None:
         _debug(f"click x={x} y={y} button={button} regions={len(self.card_regions)}")
         self.dirty = True
+        if self.message is not None:
+            return  # the `m` box takes keys only; Esc closes it
         if self.help:
             if button in (64, 65, 68, 69):
                 return
@@ -2953,6 +3023,8 @@ class UI:
             self.render_dialog(lines, w, h)
         if self.help:
             self.render_help(lines, w, h)
+        if self.message is not None:
+            self.render_message(lines, w, h)
         self.paint([clip_ansi(line, w) for line in lines[:h]], w, h)
 
     def paint(self, frame: list[str], w: int, h: int) -> None:
@@ -3293,6 +3365,7 @@ class UI:
         ("click a crew tab", "switch mate"),
         ("enter / click", "open a Captain's Call ticket"),
         ("o", "open the selected agent pane"),
+        ("m", "message Firstmate"),
         ("1-9 / tab", "switch crew (All = fleet)"),
         ("L", "show/hide Landed"),
         ("r", "refresh the board"),
@@ -3309,6 +3382,79 @@ class UI:
         self.help = False
         self.help_box = None
         self.dirty = True
+
+    # -- message Firstmate (`m`) ---------------------------------------------
+    def open_message(self) -> None:
+        self.message = MessageBox()
+        self.dirty = True
+
+    def close_message(self) -> None:
+        self.message = None
+        self.dirty = True
+
+    def message_target(self) -> tuple[Home | None, str]:
+        snap = self.collector.snapshot()
+        return supervisor_target(snap.home, snap.homes, snap.agents)
+
+    def message_send(self) -> None:
+        """Send the box text to the supervisor pane; a refusal keeps the text."""
+        m = self.message
+        if m is None:
+            return
+        self.dirty = True
+        text = _flatten_field(m.text)
+        if not text:
+            m.error = "the message is empty"
+            return
+        if len(text) > MESSAGE_LIMIT:
+            m.error = f"the message is too long ({MESSAGE_LIMIT} characters maximum)"
+            return
+        home, pane = self.message_target()
+        if not pane:
+            m.error = f"no Firstmate pane found for {home.label if home else 'this tab'}"
+            return
+        ok, detail = send_to_firstmate(pane, text)
+        if not ok:
+            m.error = detail or "herdr refused the message"
+            return
+        self.message = None
+        self.say(f"sent to firstmate ({pane})")
+
+    def render_message(self, lines: list[str], w: int, h: int) -> None:
+        """Draw the `m` box as a centered modal: its target, the text, the keys."""
+        m = self.message
+        if m is None:
+            return
+        home, pane = self.message_target()
+        dw = max(34, min(80, w - 4))
+        inner = dw - 4
+        where = home.label if home else "this tab"
+        target = f"to {where} ({pane})" if pane else f"to {where}: no Firstmate pane found"
+        rows: list[tuple[str, int | None]] = [(target, C_DIM)]
+        rows += [(ln, None) for ln in wrap_text("> " + m.text + "\u258f", inner)[-6:]]
+        if m.error:
+            rows += [(ln, C_BAD) for ln in wrap_text(m.error, inner)]
+        rows.append(("enter send \u00b7 esc close \u00b7 ctrl+u clear", C_DIM))
+        border = fg(C_BORDER)
+        title = " Message Firstmate "
+        box = [
+            f"{border}\u256d\u2500{title}"
+            + "\u2500" * max(0, dw - 3 - display_width(title))
+            + f"\u256e{RESET}"
+        ]
+        for text, color in rows:
+            body = pad(text, inner)
+            if color is not None:
+                body = f"{fg(color)}{body}{RESET}"
+            box.append(f"{border}\u2502{RESET} {body} {border}\u2502{RESET}")
+        box.append(f"{border}\u2570" + "\u2500" * (dw - 2) + f"\u256f{RESET}")
+        y0 = max(0, (h - len(box)) // 2)
+        x0 = max(0, (w - dw) // 2)
+        left = " " * x0
+        for i, dl in enumerate(box):
+            y = y0 + i
+            if 0 <= y < len(lines):
+                lines[y] = left + dl + " " * max(0, w - x0 - ansi_width(dl))
 
     def render_help(self, lines: list[str], w: int, h: int) -> None:
         """Draw the keybinding help as a centered modal (footer ``? help``)."""
@@ -3503,8 +3649,11 @@ def parse_input(buf: bytes, ui: UI) -> bytes:
                 cp, mod = _int(km.group(1)), _int(km.group(2))
                 buf = buf[km.end() :]
                 ui.dirty = True
+                if ui.message is not None:
+                    if chr(cp).isprintable():
+                        ui.message.text += chr(cp)
                 # Kitty keyboard protocol: shift+L toggles Landed (lowercase l is column right)
-                if cp in (76, 108) and (mod & 1):
+                elif cp in (76, 108) and (mod & 1):
                     ui.toggle_landed()
                 continue
             m = re.match(rb"\x1b\[([0-9]*)([ABCDZHF~])", buf)
@@ -3516,6 +3665,8 @@ def parse_input(buf: bytes, ui: UI) -> bytes:
             num, code = m.group(1), m.group(2)
             buf = buf[m.end() :]
             ui.dirty = True
+            if ui.message is not None:
+                continue  # arrows and paging do nothing in the `m` box
             if ui.dialog is not None:
                 if code == b"A":
                     ui.dialog_move(-1)
@@ -3551,7 +3702,9 @@ def parse_input(buf: bytes, ui: UI) -> bytes:
             continue
         if buf[0] == 0x1b:
             buf = buf[1:]
-            if ui.dialog is not None:
+            if ui.message is not None:
+                ui.close_message()
+            elif ui.dialog is not None:
                 ui.close_dialog()
             elif ui.help:
                 ui.close_help()
@@ -3575,6 +3728,22 @@ def parse_input(buf: bytes, ui: UI) -> bytes:
         except UnicodeDecodeError:
             continue
         ui.dirty = True
+        if ui.message is not None:
+            # the `m` box owns the keyboard: Enter sends, every printable key
+            # types, and a pasted line feed becomes a space
+            if text in ("\x03", "\x04"):
+                ui.quitting = True
+            elif text == "\r":
+                ui.message_send()
+            elif text in ("\x7f", "\b"):
+                ui.message.text = ui.message.text[:-1]
+            elif text == "\x15":  # ctrl+u clears the text
+                ui.message.text = ""
+            elif text == "\n":
+                ui.message.text += " "
+            elif text.isprintable():
+                ui.message.text += text
+            continue
         if text == "\x0c":  # ctrl+L toggles Landed when the terminal sends it
             ui.toggle_landed()
             continue
@@ -3639,6 +3808,8 @@ def parse_input(buf: bytes, ui: UI) -> bytes:
             ui.toggle_landed()
         elif text == "o":
             ui.open_selected()
+        elif text == "m":
+            ui.open_message()
         elif text == "?":
             ui.open_help()
         elif text in ("\r", "\n"):

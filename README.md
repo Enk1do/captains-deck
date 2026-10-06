@@ -92,7 +92,7 @@ Captain's Deck is that bridge: a kanban board where you can:
 - jump to the live Herdr pane when you actually need eyes on an agent,
 - and leave everything else running without babysitting terminals.
 
-The board stays read-only except for those guarded keyed answers and the steering they trigger, so orchestration keeps running and you only touch what actually requires the captain.
+The board stays read-only except for those guarded keyed answers, the steering they trigger, and a message the captain sends to Firstmate with `m`, so orchestration keeps running and you only touch what actually requires the captain.
 Submitting an answer records the durable decision, steers the owning lane's inbox, and (on a first Reconcile) binds this Deck as the captured source; the dialog spells those effects out before you queue, and `FM_FLOW_WAKE=0` keeps a submit to the intake alone.
 
 **You steer the ship. Firstmate runs the crew. Captain's Deck shows you where your attention is actually needed.**
@@ -104,10 +104,11 @@ and secondmate home into one view — only work that is planned or still running
 (Charted Next, Underway, Captain's Call, and Awaiting Merge). Landed rows stay
 on each mate's own tab. After **All**, the captain home plus each secondmate
 home appear as crew tabs. Each tab projects that home's bearings snapshot into
-five fixed columns. Nothing is ever written back, with one deliberate exception: a
+five fixed columns. Nothing is ever written back, with two deliberate exceptions: a
 Captain's Call answer (see below), where the captain's own decision goes to
 Firstmate's guarded keyed-answer intake, and the owning lane is steered so the
-answer is acted on.
+answer is acted on; and a message the captain types with `m` (see Message
+Firstmate below).
 
 The fleet board folds a task that more than one home lists - a captain home
 mirrors delegated work as `<mate>/<task>` while the mate's own home keeps
@@ -182,7 +183,7 @@ The footer shows the frequent actions - `? help`, `L - Show/Hide Landed`, and
 `? help` or press `?`) lists every binding: `←→` / `h l` move between columns,
 `↑↓` / `j k` move between cards, `pgup`/`pgdn` or the wheel scroll a column,
 clicking a crew tab switches mate, `enter` or a click opens a Captain's Call
-ticket, `o` opens the selected agent pane, `1-9` / `tab` switch crew
+ticket, `o` opens the selected agent pane, `m` opens the Message Firstmate box, `1-9` / `tab` switch crew
 (All = fleet), `L` shows or hides the Landed column, `r` refreshes the board,
 and `q` quits. `esc` or `?` closes the modal, and a click outside it closes it
 too.
@@ -253,6 +254,15 @@ durable title, its hold reason as the `ABOUT` line, a freeform answer, and
 - Nothing is resolved by the board itself: every guard, the durable decision,
 and the close all live in Firstmate.
 
+## Message Firstmate
+
+Press `m` to open the Message Firstmate box, type a message, and press `Enter` to send it (`Esc` closes the box without sending).
+The deck submits the text with `herdr agent prompt` to the Firstmate supervisor pane of the tab on screen, the same as typing it in that pane; the All tab sends to the captain home.
+The supervisor is the Herdr agent whose working directory is the home path, and the box shows that pane before you send.
+If Firstmate is waiting at an approval or question, Herdr refuses the message (`agent_blocked`), and the box keeps the text so you can answer that prompt first.
+If Firstmate is working, Claude Code holds the message until the current turn ends.
+An empty message and a message over 2000 characters are refused, and line breaks become spaces.
+
 ## Freshness: only what changed is refreshed
 
 The board never redraws itself wholesale.
@@ -286,6 +296,7 @@ The board never redraws itself wholesale.
 | `PgUp`/`PgDn`, `g`/`G` | Page / jump within the selected column |
 | `Enter` | Decide the selected Captain's Call ticket; any other ticket opens its agent pane |
 | `o` | Open the selected ticket's agent pane, including a Captain's Call one |
+| `m` | Open the Message Firstmate box; `Enter` sends, `Esc` closes |
 | `r` / `q` | Force a bearings refresh / quit |
 | `L` | Show/hide the Landed column |
 
