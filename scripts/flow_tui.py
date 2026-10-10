@@ -2695,7 +2695,7 @@ class UI:
             x += dot_plain + display_width(chip) + 1
         lines.append(head)
 
-        lines.append(f"{fg(C_BORDER)}{'\u2500' * w}{RESET}")
+        lines.append(f"{fg(C_BORDER)}{'─' * w}{RESET}")
 
         # column strip geometry (row-level scrolling: one card = 8 rows)
         gaps = len(self.columns) - 1
@@ -2742,7 +2742,7 @@ class UI:
             label = f"{title} ({shown})"
             header_cells.append(f"{fg(C_ACCENT)}{BOLD}{pad(clip(label, colw), colw)}{RESET}")
         lines.append(f"{fg(C_BORDER)}\u2502{RESET}".join(header_cells))
-        lines.append(f"{fg(C_BORDER)}{'\u2500' * w}{RESET}")
+        lines.append(f"{fg(C_BORDER)}{'─' * w}{RESET}")
 
         # cards grid: each column is a stack of 8-row card slots, scrolled by rows
         # so a wheel notch moves the content smoothly instead of by whole cards
@@ -2891,12 +2891,12 @@ class UI:
 
         def card_top(border_style: str) -> None:
             rows.append(
-                f"{border_style}\u256d" + "\u2500" * (inner - 2) + f"\u256e{RESET}"
+                f"{border_style}\u256d" + "─" * (inner - 2) + f"\u256e{RESET}"
             )
 
         def card_bottom(border_style: str) -> None:
             rows.append(
-                f"{border_style}\u2570" + "\u2500" * (inner - 2) + f"\u256f{RESET}"
+                f"{border_style}╰" + "─" * (inner - 2) + f"╯{RESET}"
             )
 
         def card_row(segments: list[tuple[str, str]], border_style: str) -> None:
@@ -3102,11 +3102,11 @@ class UI:
         x0 = max(0, (w - dw) // 2)
         border = fg(C_DECIDE if d.ctype == "decision" else C_BORDER)
         # the type badge lives once, on the card's own header row inside
-        top = "\u256d" + "\u2500" * (dw - 2) + "\u256e"
+        top = "\u256d" + "─" * (dw - 2) + "\u256e"
         box = [f"{border}{top}{RESET}"]
         for r in rows:
             box.append(f"{border}\u2502{RESET} " + r + f" {border}\u2502{RESET}")
-        box.append(f"{border}\u2570" + "\u2500" * (dw - 2) + f"\u256f{RESET}")
+        box.append(f"{border}╰" + "─" * (dw - 2) + f"╯{RESET}")
 
         self.dialog_box = (x0, y0, x0 + dw, y0 + box_h)
         left = " " * x0
@@ -3162,7 +3162,7 @@ class UI:
         y0 = max(0, min(max(0, h - box_h - 1), (h - box_h) // 2))
         x0 = max(0, (w - dw) // 2)
         border = fg(C_BORDER)
-        box = [f"{border}\u256d\u2500 Help " + "\u2500" * max(0, dw - 9) + f"\u256e{RESET}"]
+        box = [f"{border}\u256d─ Help " + "─" * max(0, dw - 9) + f"\u256e{RESET}"]
         for key, desc in self.HELP_ROWS:
             key_text = pad(key, keyw + 3)
             desc_text = clip(desc, max(0, inner - keyw - 3))
@@ -3171,7 +3171,7 @@ class UI:
                 0, inner - display_width(key_text) - display_width(desc_text)
             )
             box.append(f"{border}\u2502{RESET} {styled}{padding} {border}\u2502{RESET}")
-        box.append(f"{border}\u2570" + "\u2500" * (dw - 2) + f"\u256f{RESET}")
+        box.append(f"{border}╰" + "─" * (dw - 2) + f"╯{RESET}")
         self.help_box = (x0, y0, x0 + dw, y0 + box_h)
         left = " " * x0
         for i, dl in enumerate(box):
@@ -3193,10 +3193,10 @@ class UI:
         cardw = max(10, colw - 1)  # one column of breathing room between cards
         inner = max(4, cardw - 4)
         top_lbl = clip(card.id, max(1, inner - 1))
-        left = f"\u256d\u2500 {top_lbl} "
+        left = f"\u256d─ {top_lbl} "
         right_plain = "\u256e"
         dash_n = max(0, cardw - display_width(left) - display_width(right_plain))
-        top = f"{fg(border_c)}{left}{'\u2500' * dash_n}{right_plain}{RESET}"
+        top = f"{fg(border_c)}{left}{'─' * dash_n}{right_plain}{RESET}"
         top += " " * max(0, cardw - display_width(top))
 
         def mid(plain: str, color: int | None = None) -> str:
@@ -3220,7 +3220,7 @@ class UI:
                 ),
                 C_DIM,
             ),
-            f"{fg(border_c)}{'\u2570' + '\u2500' * (cardw - 2) + '\u256f'}{RESET}",
+            f"{fg(border_c)}{'╰' + '─' * (cardw - 2) + '╯'}{RESET}",
         ]
         # pad each row to the full column width so the separator keeps a gap
         return [line + " " * max(0, colw - cardw) for line in lines]
