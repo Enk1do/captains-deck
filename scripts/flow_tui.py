@@ -788,31 +788,50 @@ def _run(cmd: list[str], timeout: float = 25.0) -> str | None:
         return None
 
 
+def _by_id(items, key: str) -> dict[str, dict]:
+    return {i[key]: i for i in items or [] if isinstance(i, dict) and i.get(key)}
+
+
+def _herdr_list(args: list[str], field: str, key: str) -> dict[str, dict]:
+    out = _run([HERDR_BIN, *args])
+    if not out:
+        return {}
+    try:
+        return _by_id(json.loads(out).get("result", {}).get(field), key)
+    except Exception:
+        return {}
+
+
+def herdr_state() -> dict[str, dict[str, dict]]:
+    """Live Herdr agents, panes, workspaces and tabs, each keyed by its id.
+
+    One ``herdr api snapshot`` carries all four; when it fails, the agent and
+    pane lists are read the old way and the workspace/tab labels stay empty.
+    """
+    out = _run([HERDR_BIN, "api", "snapshot"])
+    if out:
+        try:
+            snap = json.loads(out)["result"]["snapshot"]
+            return {
+                "agents": _by_id(snap.get("agents"), "pane_id"),
+                "panes": _by_id(snap.get("panes"), "pane_id"),
+                "workspaces": _by_id(snap.get("workspaces"), "workspace_id"),
+                "tabs": _by_id(snap.get("tabs"), "tab_id"),
+            }
+        except Exception:
+            pass
+    return {
+        "agents": _herdr_list(["agent", "list"], "agents", "pane_id"),
+        "panes": _herdr_list(["pane", "list"], "panes", "pane_id"),
+        "workspaces": {},
+        "tabs": {},
+    }
+
+
 def herdr_agents() -> tuple[dict[str, dict], dict[str, dict]]:
     """pane_id -> agent info, pane_id -> pane info (always live from Herdr)."""
-    agents: dict[str, dict] = {}
-    panes: dict[str, dict] = {}
-    out = _run([HERDR_BIN, "agent", "list"])
-    if out:
-        try:
-            data = json.loads(out)
-            for a in data.get("result", {}).get("agents", []):
-                pid = a.get("pane_id")
-                if pid:
-                    agents[pid] = a
-        except Exception:
-            pass
-    out = _run([HERDR_BIN, "pane", "list"])
-    if out:
-        try:
-            data = json.loads(out)
-            for p in data.get("result", {}).get("panes", []):
-                pid = p.get("pane_id")
-                if pid:
-                    panes[pid] = p
-        except Exception:
-            pass
-    return agents, panes
+    state = herdr_state()
+    return state["agents"], state["panes"]
 
 
 # Live run stats (Herdr sidebar-style elapsed + token use), cached per pane.
@@ -1881,6 +1900,108 @@ def make_cards(
 
 
 # ----------------------------------------------------------------------------
+# other agents: Herdr agents that are not Firstmate panes
+# ----------------------------------------------------------------------------
+
+# Shown on the All tab in place of Landed, which the fleet merge never fills.
+OTHER_AGENTS_COLUMN = ("agents", "Other Agents")
+# Firstmate's own label for a task workspace (fm_backend_herdr_projection_
+# workspace_label in its bin/backends/herdr.sh). It covers a crew spawned since
+# the last meta index rebuild, or one from a home the deck does not discover.
+_FM_CHILD_WORKSPACE_RE = re.compile(r"^└ .+ · p:[A-Za-z0-9_-]{22}$")
+_AGENT_ORDER = {"blocked": 0, "done": 1, "working": 2, "idle": 3}
+_AGENT_BADGES = {
+    "blocked": ("\u26d4 blocked", C_BAD),
+    "done": ("\u2713 done", C_REVIEW),
+    "working": ("\u25cf working", C_OK),
+    "idle": ("\u25cb idle", C_DIM),
+}
+
+
+def firstmate_pane_ids(meta_index: dict[str, tuple[str, str]]) -> set[str]:
+    """Every Herdr pane a Firstmate task record names (state/<task>.meta)."""
+    out: set[str] = set()
+    for meta_path, _home in meta_index.values():
+        pane = read_meta(meta_path).get("herdr_pane_id", "")
+        if pane:
+            out.add(pane)
+    return out
+
+
+def track_agent_states(
+    since: dict[str, tuple[str, float, bool]], agents: dict[str, dict], now: float
+) -> dict[str, tuple[str, float, bool]]:
+    """pane_id -> (status, since_epoch, change_seen).
+
+    Herdr does not timestamp a state change, so the deck times it itself. A
+    state already present when the deck first saw the pane is at least that
+    old (change_seen False); a change seen on a tick starts its own clock.
+    """
+    out: dict[str, tuple[str, float, bool]] = {}
+    for pid, agent in agents.items():
+        status = agent.get("agent_status") or "unknown"
+        prev = since.get(pid)
+        if prev is None:
+            out[pid] = (status, now, False)
+        elif prev[0] == status:
+            out[pid] = prev
+        else:
+            out[pid] = (status, now, True)
+    return out
+
+
+def other_agent_cards(
+    state: dict[str, dict[str, dict]],
+    homes: list[Home],
+    fm_panes: set[str],
+    since: dict[str, tuple[str, float, bool]],
+    now: float,
+) -> list[Card]:
+    """One card per Herdr agent that is not a Firstmate pane, blocked first.
+
+    A Firstmate pane is one a task meta names, one whose cwd is a Firstmate
+    home (the supervisor), or one in a Firstmate task workspace.
+    """
+    home_paths = {os.path.realpath(h.path) for h in homes if h.path}
+    workspaces = state.get("workspaces") or {}
+    tabs = state.get("tabs") or {}
+    cards: list[Card] = []
+    for pid, agent in (state.get("agents") or {}).items():
+        ws_id = agent.get("workspace_id") or ""
+        ws_label = (workspaces.get(ws_id) or {}).get("label") or ""
+        cwds = {os.path.realpath(agent[k]) for k in ("cwd", "foreground_cwd") if agent.get(k)}
+        if pid in fm_panes or cwds & home_paths or _FM_CHILD_WORKSPACE_RE.match(ws_label):
+            continue
+        status = agent.get("agent_status") or "unknown"
+        tab_id = agent.get("tab_id") or ""
+        tab_label = (tabs.get(tab_id) or {}).get("label") or ""
+        tab = f"tab {tab_label}" if tab_label.isdigit() else tab_label
+        c = Card()
+        c.id = ws_label or ws_id or pid
+        c.task = pid
+        c.bucket = OTHER_AGENTS_COLUMN[0]
+        c.badge, c.badge_color = _AGENT_BADGES.get(status, (f"? {status}", C_DIM))
+        c.title = agent.get("terminal_title_stripped") or agent.get("title") or ""
+        held = since.get(pid)
+        if held and held[0] == status:
+            age = _format_elapsed(now - held[1])
+            c.doing = f"for {age}" if held[2] else f"for \u2265{age}"
+        else:
+            c.doing = ""
+        c.agent = agent.get("display_agent") or agent.get("agent") or ""
+        c.model = c.effort = c.kind = c.worktree = c.branch = ""
+        c.mode = f"{tab} \u00b7 {pid}" if tab else pid
+        c.pane_id, c.workspace_id, c.tab_id = pid, ws_id, tab_id
+        c.artifact = c.blocked_by = c.status_text = c.owner = c.home_path = ""
+        c.live_status = status
+        c.run_elapsed = c.run_tokens = ""
+        c.spawn_epoch = 0.0
+        cards.append(c)
+    cards.sort(key=lambda c: (_AGENT_ORDER.get(c.live_status, 4), c.id.lower(), c.pane_id))
+    return cards
+
+
+# ----------------------------------------------------------------------------
 # collector thread
 # ----------------------------------------------------------------------------
 
@@ -1900,6 +2021,7 @@ class Snapshot:
         self.error = ""
         self.agents: dict[str, dict] = {}
         self.panes: dict[str, dict] = {}
+        self.others: list[Card] = []
 
 
 class Collector(threading.Thread):
@@ -1929,6 +2051,8 @@ class Collector(threading.Thread):
         self._counts: dict[str, int] = {}
         self._landed_counts: dict[str, int] = {}
         self._fleet_dupes = 0
+        self._since: dict[str, tuple[str, float, bool]] = {}
+        self._others: list[Card] = []
 
     # -- public API ---------------------------------------------------------
     def snapshot(self) -> Snapshot:
@@ -1962,6 +2086,18 @@ class Collector(threading.Thread):
         with self.lock:
             snap.seq = self._snap.seq + 1
             self._snap = snap
+
+    def _refresh_agents(
+        self, homes: list[Home], now: float
+    ) -> tuple[dict[str, dict], dict[str, dict]]:
+        """Read Herdr once for this tick and rebuild the other-agents cards."""
+        state = herdr_state()
+        agents = state["agents"]
+        self._since = track_agent_states(self._since, agents, now)
+        self._others = other_agent_cards(
+            state, real_homes(homes), firstmate_pane_ids(self._meta_index), self._since, now
+        )
+        return agents, state["panes"]
 
     @staticmethod
     def _activity(homes: list[Home], agents: dict[str, dict]) -> dict[str, str]:
@@ -2088,6 +2224,9 @@ class Collector(threading.Thread):
         snap.homes = homes
         snap.home = active
         snap.cols = cols
+        snap.others = list(self._others)
+        if is_aggregate_home(active):
+            snap.cols = {**cols, OTHER_AGENTS_COLUMN[0]: list(self._others)}
         snap.agents = agents
         snap.panes = panes
         snap.totals = totals or {}
@@ -2127,13 +2266,16 @@ class Collector(threading.Thread):
                         f"iter: agents for {active.label} "
                         f"firstmate={_git_revision(active.path) or 'unknown'}"
                     )
-                    agents, panes = herdr_agents()
-                    _debug(f"iter: agents={len(agents)} panes={len(panes)}")
                     now = time.time()
                     if now - self._meta_at > 60:
                         self._meta_index = build_meta_index(homes)
                         self._meta_at = now
                     _debug(f"iter: meta={len(self._meta_index)}")
+                    agents, panes = self._refresh_agents(homes, now)
+                    _debug(
+                        f"iter: agents={len(agents)} panes={len(panes)} "
+                        f"others={len(self._others)}"
+                    )
 
                     if is_aggregate_home(active):
                         _debug("iter: fleet board")
@@ -2295,7 +2437,7 @@ class UI:
     def __init__(self) -> None:
         self.collector = Collector()
         self.show_landed = show_landed_default()
-        self.columns = [c for c in COLUMNS if self.show_landed or c[0] != "landed"]
+        self.columns = self.board_columns(None)
         self.col_idx = 0
         self.card_idx = 0
         self.scroll: dict[str, int] = {}
@@ -2332,9 +2474,16 @@ class UI:
     def current_key(self) -> str:
         return self.columns[self.col_idx][0] if self.columns else ""
 
+    def board_columns(self, home: Home | None) -> list[tuple[str, str]]:
+        """A crew tab shows Firstmate's columns; the All tab shows the active
+        ones (the fleet merge carries no Landed rows) plus Other Agents."""
+        if is_aggregate_home(home):
+            return [c for c in COLUMNS if c[0] in ACTIVE_BUCKETS] + [OTHER_AGENTS_COLUMN]
+        return [c for c in COLUMNS if self.show_landed or c[0] != "landed"]
+
     def toggle_landed(self) -> None:
         self.show_landed = not self.show_landed
-        self.columns = [c for c in COLUMNS if self.show_landed or c[0] != "landed"]
+        self.columns = self.board_columns(self.collector.snapshot().home)
         if self.show_landed:
             for i, (key, _) in enumerate(self.columns):
                 if key == "landed":
@@ -2662,6 +2811,8 @@ class UI:
         # a crew switch is "done" once the collector publishes that home
         if snap.home is not None and self.pending_home == snap.home.label:
             self.pending_home = ""
+        self.columns = self.board_columns(snap.home)
+        self.col_idx = max(0, min(self.col_idx, len(self.columns) - 1))
 
         # header / crew tabs
         head = f"{BOLD}{fg(C_TITLE)}Firstmate Flow{RESET} "
@@ -2693,6 +2844,14 @@ class UI:
             self.tab_regions.append((x, x + dot_plain + display_width(chip) + 1, home.label))
             head += " "
             x += dot_plain + display_width(chip) + 1
+        # other agents stay counted on every tab; the All tab lists them
+        others = snap.others
+        if others:
+            plural = "" if len(others) == 1 else "s"
+            head += f"{fg(C_DIM)}\u00b7 {len(others)} other agent{plural}{RESET}"
+            blocked = sum(1 for c in others if c.live_status == "blocked")
+            if blocked:
+                head += f" {fg(C_BAD)}\u26d4 {blocked} blocked{RESET}"
         lines.append(head)
 
         lines.append(f"{fg(C_BORDER)}{'─' * w}{RESET}")
@@ -3507,12 +3666,20 @@ def _print_home_cols(label: str, path: str, cols: dict[str, list[Card]]) -> None
     print()
 
 
+def _print_other_agents(cards: list[Card]) -> None:
+    print(f"== Other agents ({len(cards)})")
+    for c in cards:
+        print(f"    {c.pane_id} [{c.badge}] {c.agent or '-'} {c.id}")
+    print()
+
+
 def once(active_label: str = "", all_homes: bool = False) -> int:
     homes = discover_homes()
     if not homes:
         print("no Firstmate homes found (set FM_FLOW_HOMES or homes.conf)", file=sys.stderr)
         return 1
-    agents, panes = herdr_agents()
+    state = herdr_state()
+    agents, panes = state["agents"], state["panes"]
     meta_index = build_meta_index(homes)
     if active_label == ALL_CREW_LABEL:
         all_homes = True
@@ -3537,6 +3704,9 @@ def once(active_label: str = "", all_homes: bool = False) -> int:
         _print_home_cols(ALL_CREW_LABEL, f"{len(parts)} homes", merged)
     for home, cols, _totals in parts:
         _print_home_cols(home.label, home.path, cols)
+    _print_other_agents(
+        other_agent_cards(state, fleet, firstmate_pane_ids(meta_index), {}, time.time())
+    )
     return 0
 
 
